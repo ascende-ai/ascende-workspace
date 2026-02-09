@@ -1,0 +1,67 @@
+# Dependencies
+node_modules/
+*/node_modules/
+**/node_modules/
+
+# Build outputs
+out/
+dist/
+bin/
+build/
+*/out/
+*/dist/
+*/bin/
+*/build/
+**/out/
+**/dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Compiled files
+*.js.map
+*.d.ts.map
+
+# Environment
+.env
+.env.local
+.env.*.local
+**/.env
+
+# OS
+Thumbs.db
+.Spotlight-V100
+.Trashes
+
+# Temporary
+tmp/
+temp/
+*.tmp
+
+# Package manager
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Electron
+**/electron-builder.yml
+
+# User data directories (development)
+.pearai-dev/
+code-oss-dev/
