@@ -1,0 +1,68 @@
+---
+description: How to hide activity bar icons (Source Control, Run and Debug, Extensions) in ascende-lde
+globs: ascende-lde/product.json
+alwaysApply: false
+---
+
+# Hiding Sidebar View Container Icons
+
+Activity bar icons are controlled via **product.json** — no recompile needed.
+
+## Workflow
+
+1. Edit `ascende-lde/product.json` → `hiddenViewContainers` array
+2. **Restart the app** (quit and reopen)
+3. No `npm run watch` or build step required
+
+## Configuration
+
+### Activity bar icons (view containers)
+
+```json
+"hiddenViewContainers": [
+  "workbench.view.scm",
+  "workbench.view.debug",
+  "workbench.view.extensions"
+]
+```
+
+### Sidebar views (Outline, Timeline)
+
+```json
+"hiddenViews": [
+  "outline",
+  "timeline"
+]
+```
+
+- **To hide**: Add the ID to the array
+- **To show**: Remove the ID (or clear the array)
+- **Restart**: Changes apply after restarting the app
+
+### Creator references (Enter Creator, ascende.ai Creator)
+
+```json
+"hideCreatorReferences": true
+```
+
+When `true`, hides:
+- "Enter Creator" button in the title bar
+- "ascende.ai Creator" button in the empty-editor watermark
+- "ascende.ai Creator" toggle in Customize Layout
+
+## View Container IDs
+
+- Source Control: `workbench.view.scm`
+- Run and Debug: `workbench.view.debug`
+- Extensions / Marketplace: `workbench.view.extensions`
+- Explorer: `workbench.view.explorer`
+- Search: `workbench.view.search`
+
+## View IDs (for hiddenViews)
+
+- Outline: `outline`
+- Timeline: `timeline`
+
+## Note
+
+This only hides the **icon** from the activity bar. Views and commands remain available via command palette and shortcuts.
