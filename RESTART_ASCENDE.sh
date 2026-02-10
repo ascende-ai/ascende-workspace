@@ -4,7 +4,7 @@
 echo "🔄 Restarting Ascende..."
 
 # Kill the current Ascende process
-pkill -f "PearAI.app/Contents/MacOS/Electron"
+pkill -f "ascende.ai.app/Contents/MacOS/Electron" || pkill -f "PearAI.app/Contents/MacOS/Electron"
 sleep 2
 
 # Navigate to ascende-lde
