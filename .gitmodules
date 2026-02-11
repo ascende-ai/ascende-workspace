@@ -1,0 +1,12 @@
+[submodule "ascende-lde"]
+	path = ascende-lde
+	url = https://github.com/ascende-ai/ascende-lde.git
+[submodule "ascende-agent"]
+	path = ascende-agent
+	url = https://github.com/ascende-ai/ascende-agent.git
+[submodule "ascende-extensions"]
+	path = ascende-extensions
+	url = https://github.com/ascende-ai/ascende-extensions.git
+[submodule "eigent-backend"]
+	path = eigent-backend
+	url = https://github.com/ascende-ai/eigent-backend.git

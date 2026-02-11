@@ -1,0 +1,195 @@
+# Playbook: Contestação Cível/Consumidor (Planos de Saúde) + Trace do Agente
+
+**Objetivo:** Documentar o fluxo end-to-end e os recursos técnicos usados pelo agente (Cursor) para produzir uma contestação na carteira Cível/Consumidor, de forma que outro agente ou humano possa reproduzir o processo.
+
+**Caso-exemplo:** Processo 0761203-73.2025.8.07.0001 (Danielle Pereira de Faria x Bradesco Saúde).
+
+---
+
+## 1. Diagrama de fluxo (visão geral)
+
+```mermaid
+flowchart TB
+    subgraph ENTRADA
+        A[Novo processo na pasta do caso] --> B[Autos: Inicial, Decisão, Anexos]
+    end
+
+    subgraph FASE_1_TRIAGEM
+        B --> C[Listar 01-Autos, 02-Gestao, 03-Pecas]
+        C --> D[Ler MEMORIES.md]
+        D --> E[Extrair texto dos PDFs]
+        E --> F[Petição Inicial + Decisão + Hipossuficiência]
+    end
+
+    subgraph FASE_2_PLANO
+        F --> G[Consultar skills: preliminares, redação]
+        G --> H[Consultar Banco de Teses + plano exemplo]
+        H --> I[Elaborar .plan.md]
+        I --> J[Atualizar PROXIMOS_PASSOS]
+    end
+
+    subgraph FASE_3_REDACAO
+        J --> K[Ler plano + MEMORIES + teses]
+        K --> L[Escrever minuta da Contestação]
+        L --> M[Salvar em Pendente_Validacao]
+    end
+
+    subgraph FASE_4_QA
+        M --> N[Confrontar com MEMORIES + autos]
+        N --> O[Ajustes: vocativo, parágrafos, IDs, negrito]
+        O --> P[Relatório QA + minuta final]
+    end
+
+    ENTRADA --> FASE_1_TRIAGEM
+    FASE_1_TRIAGEM --> FASE_2_PLANO
+    FASE_2_PLANO --> FASE_3_REDACAO
+    FASE_3_REDACAO --> FASE_4_QA
+    FASE_4_QA --> Q[Validação humana]
+```
+
+---
+
+## 2. Playbook genérico (fases, ferramentas, decisões)
+
+### 2.1 Fase 1 — Triagem e leitura dos autos
+
+| Objetivo | Saber o que existe no caso e extrair conteúdo dos PDFs para análise. |
+|----------|---------------------------------------------------------------------|
+| **Ferramentas** | `list_dir`, `read`, `grep`, `run` (Python + pdfplumber). |
+| **Artefatos lidos** | Estrutura da pasta do caso; `MEMORIES.md`; lista de PDFs em `01-Autos`. |
+| **Técnica de extração** | Script Python com `pdfplumber`: abrir cada PDF, iterar páginas, `page.extract_text()`, concatenar e gravar em arquivo de texto (ex.: saída em `.cursor/.../agent-tools/*.txt`). PDFs prioritários: Petição Inicial, Decisão, Declaração de Hipossuficiência. |
+| **Decisões** | Limitar páginas por PDF para evitar timeout; ler o arquivo de saída em blocos (offset/limit) para localizar trechos relevantes (qualificação, pedidos, decisão, prazo). |
+
+### 2.2 Fase 2 — Elaboração do plano estratégico
+
+| Objetivo | Produzir um `.plan.md` que fixe fatos, preliminares (Art. 337 CPC), teses de mérito e estrutura da peça. |
+|----------|--------------------------------------------------------------------------------------------------------|
+| **Ferramentas** | `read`, `glob_file_search`, `list_dir`. |
+| **Artefatos lidos** | Conteúdo extraído dos PDFs; `avaliacao-preliminares-cpc/SKILL.md`; `redacao-civel-consumidor/SKILL.md`; `00-Banco-Teses/` (tese rol taxativo, tese mero aborrecimento, pedidos padrão); exemplo de plano (ex.: outro caso com `.plan.md`); `CONTEXTO_CARTEIRA.md`. |
+| **Decisões** | Preliminares: só incluir no plano as que tiverem suporte (ex.: foro de eleição só se houver contrato). Não arguir gratuidade sem indício nos autos. Usar decisão que indeferiu tutela como reforço da tese (laudo unilateral insuficiente). |
+
+### 2.3 Fase 3 — Redação da minuta
+
+| Objetivo | Gerar o texto da contestação em `.txt` (UTF-8), alinhado ao plano e ao estilo do escritório. |
+|----------|----------------------------------------------------------------------------------------------|
+| **Ferramentas** | `read`, `write`. |
+| **Artefatos lidos** | Plano (`.plan.md`); `MEMORIES.md`; teses do Banco (texto para peça); `pedidos-padrao-contestacao.md`; skill de redação cível/consumidor. |
+| **Decisões** | Vocativo: sempre “Excelência” (MEMORIES). Parágrafos numerados; títulos em CAIXA ALTA e negrito; referência a Id. dos documentos; negrito só para fatos/datas cruciais. Placeholders: [NOME DO ADVOGADO], OAB/DF [NÚMERO]. Salvar em `03-Pecas-Processuais/Pendente_Validacao/` com nome `Contestacao_[CNJ]_[DATA]_V1.txt`. |
+
+### 2.4 Fase 4 — Revisão (QA)
+
+| Objetivo | Garantir conformidade com MEMORIES.md, quebras de parágrafo e fact-check contra os autos. |
+|----------|-------------------------------------------------------------------------------------------|
+| **Ferramentas** | `read`, `grep`, `search_replace`, `write`. |
+| **Artefatos lidos** | Minuta; `MEMORIES.md`; plano; trechos dos autos (para conferência). |
+| **Decisões** | Corrigir qualquer “Vossa Excelência” → “Excelência”. Quebrar blocos > ~6 linhas. Reduzir negrito em frases longas (manter só termos cruciais). Incluir Id. da procuração e da inicial onde faltar. Gerar relatório QA em `02-Gestao/QA_Contestacao_[CNJ]_[DATA].md`. |
+
+---
+
+## 3. Ferramentas do agente (resumo por tipo)
+
+| Ferramenta | Uso no fluxo |
+|------------|----------------|
+| **list_dir** | Explorar pasta do caso (01-Autos, 02-Gestao, 03-Pecas), 04-Modelos, outros casos. |
+| **read** | MEMORIES.md, skills, plano, teses, minuta, saída da extração de PDF, CONTEXTO_CARTEIRA. |
+| **grep** | Localizar “PEDIDOS”, “Decisão”, “contestação”, “Vossa”, “V. Exa” na minuta ou no texto extraído. |
+| **glob_file_search** | Encontrar `*.plan.md`, modelos, arquivos por padrão. |
+| **run** | Executar script Python (pdfplumber) para extrair texto dos PDFs; cwd = raiz do projeto. |
+| **write** | Criar PROXIMOS_PASSOS.md, .plan.md, Contestação (V1), relatório QA. |
+| **search_replace** | Ajustes na minuta (vocativo, quebras, numeração, IDs, negrito) e em PROXIMOS_PASSOS. |
+
+Nenhuma ferramenta de “IA externa” ou API foi usada além do modelo do Cursor; o conteúdo jurídico veio dos arquivos do repositório e do texto extraído dos PDFs.
+
+---
+
+## 4. Trace detalhado — Caso 0761203-73.2025.8.07.0001
+
+Ordem reconstruída das operações (ferramenta → propósito → input/output resumido).
+
+### 4.1 Triagem e próximos passos (primeira interação)
+
+| # | Ferramenta | Parâmetros / Ação | Resultado resumido |
+|---|------------|-------------------|--------------------|
+| 1 | list_dir | `01-Carteira-Civel-Consumidor/Autor-Desconhecido-0761203-73.2025.8.07.0001` | Estrutura: 01-Autos, 02-Gestao, 03-Pecas. |
+| 2 | read | `MEMORIES.md` | Regras: vocativo, parágrafos, IDs, QA, não mover para Aprovados. |
+| 3 | list_dir | `.../01-Autos` | Lista de PDFs (Inicial, Procuração, Hipossuficiência, Anexos 04–07, Decisão 08, PDF original). |
+| 4 | list_dir | `.../02-Gestao`, `.../03-Pecas-Processuais` | Pastas vazias. |
+| 5 | grep | `0761203\|73\.2025\.8\.07\.0001` no caso | Sem matches em conteúdo. |
+| 6 | read | `redacao-civel-consumidor/SKILL.md` | Identidade ré, formatação, teses, output em Pendente_Validacao. |
+| 7 | read | `avaliacao-preliminares-cpc/SKILL.md` | Checklist Art. 337, preliminares a considerar. |
+| 8 | glob_file_search | `**/*.plan.md` | Exemplos em outros casos. |
+| 9 | list_dir | `01-Carteira-Civel-Consumidor` | Outros casos (Alexley, SYLFARLLEN, etc.). |
+| 10 | read | SYLFARLLEN `.../02-Gestao/2026-02-04_Plano_Acao_Filiacao_Socioafetiva.plan.md` (limit 80) | Estrutura de um plano (objetivo, diagnóstico, estratégia, pedidos). |
+| 11 | list_dir | Alexley `.../02-Gestao` | Contém Plano_Defesa.md. |
+| 12 | write | `.../02-Gestao/PROXIMOS_PASSOS.md` | Checklist: leitura, plano, redação, QA, prazos; status atual. |
+
+### 4.2 Elaboração do plano (segunda interação — PDFs fornecidos)
+
+| # | Ferramenta | Parâmetros / Ação | Resultado resumido |
+|---|------------|-------------------|--------------------|
+| 13 | list_dir | `.../01-Autos` | Confirmar nomes dos PDFs. |
+| 14 | run | `python3 -c "import pdfplumber; ..."` (script de extração) | base = Path('01-Carteira-Civel-Consumidor/.../01-Autos'); extrai 01-Petição, 08-Decisão, 03-Declaração (até 20 pág. inicial, 5 decisão/decl.). Saída em agent-tools/*.txt (~58 KB). |
+| 15 | read | agent-tools/*.txt (limit 500) | Início da Petição: autora Danielle Pereira de Faria, ré Bradesco, ação Obrigação de Fazer c/c Antecipação Tutela, competência, gratuidade. |
+| 16 | read | agent-tools/*.txt (offset 500, limit 450) | Fatos (gastroplastia, cirurgia reparadora, negativa, 21.11.2025, R$ 40k), CDC, dignidade, Tema 1069. |
+| 17 | read | agent-tools/*.txt (offset 950, limit 550) | Jurisprudência STJ, Rol ANS, pedidos (multa, antecipação), trecho da Decisão. |
+| 18 | grep | "PEDIDOS\|Ante o exposto\|Citação\|contestação\|prazo" no arquivo extraído | Localizar "Ante o exposto, INDEFIRO A TUTELA"; "Cite-se... contestação... 15 dias"; Art. 231 I CPC. |
+| 19 | read | agent-tools/*.txt (offset 1550, limit 400) | Obrigação de fazer, multa, antecipação; Decisão completa: gratuidade deferida, tutela indefinida, citação 15 dias. |
+| 20 | read | Plano_Defesa Alexley | Estrutura de plano de defesa (ações, documentos, teses). |
+| 21 | list_dir | `00-Banco-Teses` | 01-Merito, 02-Danos-Morais, 03-Pedidos. |
+| 22 | read | `tese-mero-aborrecimento.md`, `tese-rol-taxativo-ans.md` (limit 60) | Texto para peça (dano moral, rol taxativo). |
+| 23 | read | `pedidos-padrao-contestacao.md` | Conclusão e requerimento de intimações. |
+| 24 | read | `CONTEXTO_CARTEIRA.md` (limit 40) | Ré Bradesco, teses (estético, rol, dano moral, carência). |
+| 25 | write | `.../02-Gestao/2026-02-10_Plano_Contestacao_0761203.plan.md` | Plano: resumo fatos, decisão, preliminares, teses (estético/reparador, rol, carência, dano moral, pacta), estrutura da contestação, documentos-chave, próximos passos. |
+| 26 | read | PROXIMOS_PASSOS.md | Conteúdo atual. |
+| 27 | search_replace | 3 blocos em PROXIMOS_PASSOS | Atualizar status (plano criado, autor identificado), marcar itens concluídos, alterar “Ações imediatas”. |
+
+### 4.3 Redação da minuta (terceira interação)
+
+| # | Ferramenta | Parâmetros / Ação | Resultado resumido |
+|---|------------|-------------------|--------------------|
+| 28 | read | Plano completo 0761203 | Resumo, decisão, preliminares, teses, estrutura, documentos. |
+| 29 | glob_file_search | MODELO*CONTEST* em Cível-Consumidor | Nenhum modelo com esse nome. |
+| 30 | list_dir | 04-Modelos | Apenas TEMPLATE_MEMO_SUBSIDIOS. |
+| 31 | read | MEMORIES.md | Vocativo, formatação, IDs. |
+| 32 | read | redacao-civel-consumidor/SKILL.md | Ré, formatação, teses obrigatórias, output. |
+| 33 | read | tese-mero-aborrecimento.md, tese-rol-taxativo-ans.md | Trechos para colar/adaptar. |
+| 34 | read | pedidos-padrao-contestacao.md | Pedidos e requerimento de intimações. |
+| 35 | read | CONTEXTO_CARTEIRA.md (limit 40) | Teses e postura. |
+| 36 | write | `.../03-Pecas-Processuais/Pendente_Validacao/Contestacao_0761203_2026-02-10_V1.txt` | Minuta completa (I a VII, 20 itens + pedidos). |
+| 37 | search_replace | "Vossa Excelência" → "Excelência" na minuta | Um uso no requerimento. |
+| 38 | search_replace | Protesta: adicionar "docs. Id. 256797782 e anexos 256803159 a 256803162" | Referência explícita aos IDs. |
+| 39 | grep | "Vossa|V. Exa" na minuta | Nenhum match (ok). |
+
+### 4.4 Revisão QA (quarta interação)
+
+| # | Ferramenta | Parâmetros / Ação | Resultado resumido |
+|---|------------|-------------------|--------------------|
+| 40 | read | Contestação (arquivo completo) | Texto atual. |
+| 41 | read | MEMORIES.md | Checklist QA. |
+| 42 | read | Plano (limit 95) | Conferir alinhamento. |
+| 43 | search_replace | Qualificação: "(procuração em anexo – doc. Id. 256797785)" | Inclusão do Id. da procuração. |
+| 44 | search_replace | § 4: remover "fls.", quebrar em dois parágrafos (novo § 5) | Evitar wall of text; "Decisão (doc. Id. 257012351)". |
+| 45 | search_replace | § 6 e § 7: reduzir negrito apenas a "a operadora pode utilizar-se do procedimento da junta médica" | Conforme MEMORIES (negrito só fatos/datas). |
+| 46 | search_replace | Renumeração II a VII: 6–9, 10–12, 13, 14–17, 18–19, 20–22 | Sequência 1–22 após quebras. |
+| 47 | search_replace | § 14: "(doc. Id. 256797782)" ao referir inicial | Referência à inicial. |
+| 48 | read | Minuta final | Verificar consistência. |
+| 49 | write | `.../02-Gestao/QA_Contestacao_0761203_2026-02-10.md` | Relatório QA (checklist MEMORIES, ajustes, fact-check). |
+
+---
+
+## 5. Dependências e pré-requisitos
+
+- **Ambiente:** Python 3 com `pdfplumber` instalado (para extração de PDFs).
+- **Repositório:** Estrutura do caso com `01-Autos`, `02-Gestao`, `03-Pecas-Processuais`; existência de `MEMORIES.md`, skills em `.cursor/skills/`, Banco de Teses em `00-Banco-Teses/`.
+- **Convenções:** Nomes de arquivos dos autos com Id. no nome (ex.: `01-Petição-Inicial-256797782.pdf`) permitem referência estável na peça.
+
+---
+
+## 6. Como repetir o fluxo (instruções para outro agente/humano)
+
+1. **Triagem:** Listar a pasta do caso; ler `MEMORIES.md`; listar `01-Autos`. Se houver PDFs, rodar extração (Python + pdfplumber) para Inicial, Decisão e, se relevante, Hipossuficiência.
+2. **Plano:** Com o texto extraído, ler skills de preliminares e redação e Banco de Teses; redigir `.plan.md` (fatos, decisão, preliminares, teses, estrutura, documentos); atualizar `PROXIMOS_PASSOS.md`.
+3. **Minuta:** Ler o plano, MEMORIES e teses; escrever a contestação em `03-Pecas-Processuais/Pendente_Validacao/` com nome `Contestacao_[CNJ]_[DATA]_V1.txt`; usar apenas "Excelência"; parágrafos numerados; IDs dos documentos; negrito parcimonioso.
+4. **QA:** Reler minuta e MEMORIES; corrigir vocativo; quebrar parágrafos longos; checar IDs e fact-check contra autos; gerar relatório QA em `02-Gestao/`. Não mover nada para `Aprovados`.
+
+O diagrama Mermaid (seção 1) pode ser usado como mapa do fluxo; as seções 2 e 4 como referência de ferramentas e trace para reprodução ou treino.
