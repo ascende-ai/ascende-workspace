@@ -1,0 +1,211 @@
+# Agent Architecture: Think → Plan → Act (Technical Reference)
+
+This document describes **how to set up agents** so they reason, produce a plan artifact, and then act in a reproducible way. It is tool- and flow-oriented so you can **recreate this logic in your own app** (your agent runtime, tool layer, and orchestration).
+
+**Audience:** Engineers building agent systems that use tools (read, write, run, search) and need a clear think–plan–act loop.
+
+---
+
+## 1. High-level loop: Think → Plan → Act
+
+The agent never “just writes” the final artifact. It (1) **thinks** by reading context and deciding what phase to run, (2) **plans** by producing a structured artifact (e.g. a `.plan.md`) that constrains the next step, and (3) **acts** by calling tools in sequence against that plan. The human validates only after Act (and can send the agent back to Plan or Act).
+
+```mermaid
+flowchart LR
+    subgraph THINK
+        T1[Read context]
+        T2[Identify phase]
+        T3[Decide next step]
+        T1 --> T2 --> T3
+    end
+
+    subgraph PLAN
+        P1[Produce plan artifact]
+        P2[Define structure of output]
+        P3[List dependencies]
+        P1 --> P2 --> P3
+    end
+
+    subgraph ACT
+        A1[Tool sequence]
+        A2[Validate vs plan]
+        A3[Persist artifact]
+        A1 --> A2 --> A3
+    end
+
+    THINK --> PLAN
+    PLAN --> ACT
+    ACT --> THINK
+```
+
+**Invariant:** No write to the “final” output (e.g. the legal brief) without a **plan artifact** that was written first and read in the Act phase.
+
+---
+
+## 2. Tool taxonomy (for your agent-tools layer)
+
+Map your app’s tools to these categories so the agent (or your orchestration) knows **when** to use each.
+
+| Category | Purpose | Typical tools | When the agent uses them |
+|----------|---------|----------------|---------------------------|
+| **Discovery** | Find paths and locations; avoid hardcoding. | `list_dir`, `glob_file_search`, `grep` (on filenames or content) | Start of a phase; when the next artifact’s path is unknown (e.g. “where are plans?”). |
+| **Read** | Load context and prior artifacts. | `read` (file, optional offset/limit) | Every phase: read global rules (e.g. MEMORIES), read plan before acting, read extracted text in chunks. |
+| **Transform** | Turn unstructured input into usable text (e.g. PDF → text). | `run` (script: Python + pdfplumber, etc.) | When inputs are binary or need extraction; output written to a path the agent then reads. |
+| **Write** | Create or replace an artifact. | `write` (path, contents) | After a phase completes: write plan, write first draft, write QA report. |
+| **Patch** | Change part of an existing artifact without full rewrite. | `search_replace` (path, old_string, new_string) | QA and small fixes: vocative, numbering, add IDs; keep a single source of truth. |
+
+**Design note for your app:** Expose these as **agent-tools** with clear names (e.g. `discovery_list_dir`, `read_file`, `transform_extract_pdf_text`, `write_artifact`, `patch_artifact`). The agent’s prompt (or a router) should say: “Use Discovery when you don’t know paths; use Read before every Plan/Act; use Transform for PDFs; use Write for new artifacts; use Patch for edits.”
+
+---
+
+## 3. Think phase (what to read, how to decide)
+
+**Goal:** Decide *what* to do next (which phase) and *what* to read so the next phase has enough context.
+
+| Step | Action | Tools | Output (internal state) |
+|------|--------|--------|--------------------------|
+| 1 | Resolve input (e.g. “this case folder”) | `list_dir` on case root | List of dirs: `01-Autos`, `02-Gestao`, `03-Pecas`. |
+| 2 | Load global rules | `read` MEMORIES.md (and optionally AGENTS.md) | Constraints: vocative, paragraph length, IDs, QA gate. |
+| 3 | Discover what exists | `list_dir` 01-Autos; `list_dir` 02-Gestao; `list_dir` 03-Pecas | Existence of PDFs, existing plan, existing draft. |
+| 4 | Decide phase | — | If no plan → Plan phase. If plan and no draft → Act (draft). If draft and no QA → Act (QA). |
+
+**Recreating in your app:**  
+- Implement a **context loader** that always runs first: read “constitution” (MEMORIES) + case layout.  
+- Implement a **phase selector**: simple rules (e.g. “has plan?” “has draft?”) or a small classifier that returns `TRIAGE | PLAN | DRAFT | QA`.
+
+---
+
+## 4. Plan phase (produce a plan artifact)
+
+**Goal:** Write a **plan artifact** (e.g. `.plan.md`) that the Act phase will consume. The plan is the contract between “reasoning” and “execution.”
+
+| Step | Action | Tools | Output |
+|------|--------|--------|--------|
+| 1 | Get raw input (e.g. PDF text) | `read` extracted text; or `run` extractor then `read` output | Full or chunked text of Inicial, Decisão, etc. |
+| 2 | Load domain rules and examples | `read` skill files, `read` “bank” (theses), `glob` *.plan.md, `read` one example plan | Checklist (e.g. Art. 337), structure of plan, wording snippets. |
+| 3 | Compose plan | — | Structured sections: facts, decision summary, preliminaries, theses, structure of target artifact, document IDs. |
+| 4 | Persist plan | `write` to `02-Gestao/<name>.plan.md` | Plan on disk. |
+| 5 | Update checklist (optional) | `read` PROXIMOS_PASSOS; `search_replace` to mark done / next | Shared “what’s done / what’s next” state. |
+
+**Recreating in your app:**  
+- **Plan schema:** Define a schema (or template) for the plan (sections + optional fields). The agent fills it and your app writes it to a known path.  
+- **Dependencies:** Plan explicitly lists “document IDs,” “theses to include,” “preliminaries to argue.” The Act phase reads this and uses it as a checklist.
+
+---
+
+## 5. Act phase (execute against the plan)
+
+**Goal:** Produce the **target artifact** (e.g. the legal brief) and then run **QA** (read again, patch, write QA report). No “final” write without a plan.
+
+### 5.1 Draft sub-phase
+
+| Step | Action | Tools | Output |
+|------|--------|--------|--------|
+| 1 | Load plan and rules | `read` .plan.md, MEMORIES.md, theses/pedidos | In-memory spec for the draft. |
+| 2 | Generate draft | — | Full text (model-generated or template-filled). |
+| 3 | Persist draft | `write` to `03-Pecas-Processuais/Pendente_Validacao/<name>.txt` | Draft on disk. |
+| 4 | Optional immediate patches | `search_replace` (e.g. vocative, one-off IDs) | Draft updated. |
+
+### 5.2 QA sub-phase
+
+| Step | Action | Tools | Output |
+|------|--------|--------|--------|
+| 1 | Load draft and rules | `read` draft, MEMORIES.md | Current text + checklist. |
+| 2 | Compare and decide patches | `grep` for forbidden strings; decide paragraph breaks, bold, IDs | List of search_replace ops. |
+| 3 | Apply patches | `search_replace` (multiple) | Draft updated. |
+| 4 | Write QA report | `write` to `02-Gestao/QA_<artifact>_<id>.md` | Audit trail: what was checked, what was changed. |
+
+**Recreating in your app:**  
+- **Act = deterministic tool sequence** driven by the plan: read plan → read theses → generate → write → (read draft + MEMORIES → patch* → write QA).  
+- **QA = validator** that runs after draft: rules (regex or list) + optional LLM “does this match plan?”; output is a set of patches + a small report.
+
+---
+
+## 6. Data flow (artifacts and state)
+
+```mermaid
+flowchart TB
+    subgraph INPUTS
+        I1[MEMORIES.md]
+        I2[Case folder]
+        I3[PDFs]
+    end
+
+    subgraph THINK
+        T[Context load + phase decision]
+    end
+
+    subgraph PLAN_PHASE
+        P1[Extracted text]
+        P2[.plan.md]
+        P3[PROXIMOS_PASSOS updated]
+    end
+
+    subgraph ACT_PHASE
+        A1[Draft .txt]
+        A2[Patched draft]
+        A3[QA report .md]
+    end
+
+    I1 --> T
+    I2 --> T
+    I3 --> P1
+    T --> PLAN_PHASE
+    P2 --> ACT_PHASE
+    I1 --> ACT_PHASE
+    ACT_PHASE --> A2
+    ACT_PHASE --> A3
+```
+
+**State your app can persist:**  
+- **Phase:** TRIAGE | PLAN | DRAFT | QA | DONE  
+- **Paths:** case_root, path_plan, path_draft, path_qa_report  
+- **Plan digest:** e.g. list of “preliminaries,” “theses,” “document IDs” so the validator can check the draft against the plan.
+
+---
+
+## 7. Decision points (when to branch)
+
+| Where | Condition | Branch |
+|-------|-----------|--------|
+| After Think | No PDF text in case | Run Transform (extract PDFs); then re-Read. |
+| After Think | No plan file | Run Plan phase. |
+| After Think | Plan exists, no draft | Run Act (Draft). |
+| After Think | Draft exists, no QA report | Run Act (QA). |
+| In Plan | “Preliminary X only if Y” | Include X in plan only if Y is present in read context (e.g. foro de eleição only if contract was read). |
+| In Act (QA) | Forbidden string in draft | Patch: replace with allowed form (e.g. “Vossa Excelência” → “Excelência”). |
+| In Act (QA) | Paragraph longer than N lines | Patch: split into two paragraphs and renumber. |
+
+Implement these as **if/else** in your orchestrator or as **prompt instructions** (“If you don’t see a plan, create one first…”).
+
+---
+
+## 8. Tool call patterns (reusable)
+
+- **Discovery then Read:** `list_dir` → choose path → `read(path)`. Use when paths are dynamic (e.g. “any .plan.md in 02-Gestao”).  
+- **Transform then Read in chunks:** `run(extract_script)` → `read(output_file, offset, limit)` in a loop until you have the segments you need (e.g. “find where Decisão says INDEFIRO”).  
+- **Read many, then Write one:** `read(plan)`, `read(memories)`, `read(thesis1)`, `read(thesis2)` → `write(draft)`. Keeps a single write of the main artifact.  
+- **Read, then Patch N times:** `read(draft)`, then N × `search_replace(draft, old, new)` for QA fixes; then `write(qa_report)`.  
+
+Your app can expose these as **higher-level tools** (e.g. `load_case_context`, `extract_pdfs_to_text`, `generate_draft_from_plan`, `run_qa_and_patch`) that wrap the low-level tools.
+
+---
+
+## 9. Appendix: Trace for case 0761203 (one run)
+
+Single run of the Think → Plan → Act loop for the case that produced the contestação. High-level only (phases + tools + main decisions).
+
+| Phase | Tools used | Main decision / output |
+|-------|------------|--------------------------|
+| **Think** | list_dir (case, 01-Autos, 02-Gestao, 03-Pecas), read (MEMORIES), grep | Case has PDFs and empty 02-Gestao/03-Pecas → need Plan then Act. |
+| **Plan** | run (Python pdfplumber), read (extracted text in chunks), read (skills, theses, example plan), write (.plan.md), search_replace (PROXIMOS_PASSOS) | Plan written with facts, decision summary, preliminaries, theses, structure; checklist updated. |
+| **Act (Draft)** | read (plan, MEMORIES, theses, pedidos), write (Contestacao_0761203_2026-02-10_V1.txt), search_replace (vocative, IDs) | Draft written to Pendente_Validacao; immediate patches for “Excelência” and document IDs. |
+| **Act (QA)** | read (draft, MEMORIES, plan), grep (Vossa), search_replace (procuração Id., §4 split, negrito §7, renumber, Id. inicial), write (QA_Contestacao_0761203_2026-02-10.md) | Draft patched; QA report written; human validation left pending. |
+
+**Artifacts produced in order:**  
+1. PROXIMOS_PASSOS.md (updated)  
+2. 2026-02-10_Plano_Contestacao_0761203.plan.md  
+3. Contestacao_0761203_2026-02-10_V1.txt  
+4. QA_Contestacao_0761203_2026-02-10.md  
+
+This trace is the **concrete instance** of the generic flow in sections 1–8. You can replay it in your app by implementing the same phases and tool sequence and using the same decision rules.
